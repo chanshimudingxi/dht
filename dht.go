@@ -45,6 +45,8 @@ type Config struct {
 	// callback when got get_peers request
 	OnGetPeers func(string, string, int)
 	// callback when got announce_peer request
+	// 当收到annouce_peer请求的时候，进行处理的函数。
+	// 正常情况下就是建立一个tcp监听端口，进行数据传输
 	OnAnnouncePeer func(string, string, int)
 	// blcoked ips
 	BlockedIPs []string

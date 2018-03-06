@@ -101,7 +101,7 @@ func (tm *tokenManager) check(addr *net.UDPAddr, tokenString string) bool {
 }
 
 // makeQuery returns a query-formed data.
-// "t"：交易，也可以叫做回话ID
+// "t"：交易ID，也可以叫做会话ID
 // "q": RPC类型。"ping","find_node","get_peers","announce_peer"其中一种
 // "y": 包类型。 "q"表示query，查找信息。"r"表示response，回复。"e"表示error，错误。
 // "a": 请求参数。
@@ -160,7 +160,7 @@ type transaction struct {
 }
 
 // transactionManager represents the manager of transactions.
-// 交易管理器，或者叫回话管理器。
+// 交易管理器，或者叫会话管理器。
 type transactionManager struct {
 	*sync.RWMutex
 	transactions *syncedMap
@@ -345,6 +345,7 @@ func (tm *transactionManager) sendQuery(
 }
 
 // ping sends ping query to the chan.
+// 检查一个节点是否有效
 func (tm *transactionManager) ping(no *node) {
 	tm.sendQuery(no, pingType, map[string]interface{}{
 		"id": tm.dht.id(no.id.RawString()),
@@ -352,6 +353,7 @@ func (tm *transactionManager) ping(no *node) {
 }
 
 // findNode sends find_node query to the chan.
+// 向一个节点发送查找节点的请求，在初始路由表或验证桶是否存活时使用
 func (tm *transactionManager) findNode(no *node, target string) {
 	tm.sendQuery(no, findNodeType, map[string]interface{}{
 		"id":     tm.dht.id(target),
@@ -468,6 +470,7 @@ func parseMessage(data interface{}) (map[string]interface{}, error) {
 }
 
 // handleRequest handles the requests received from udp.
+// 处理请求
 func handleRequest(dht *DHT, addr *net.UDPAddr,
 	response map[string]interface{}) (success bool) {
 
@@ -683,6 +686,7 @@ func findOn(dht *DHT, r map[string]interface{}, target *bitmap,
 }
 
 // handleResponse handles responses received from udp.
+// 处理响应
 func handleResponse(dht *DHT, addr *net.UDPAddr,
 	response map[string]interface{}) (success bool) {
 
@@ -769,6 +773,7 @@ func handleResponse(dht *DHT, addr *net.UDPAddr,
 }
 
 // handleError handles errors received from udp.
+// 处理错误
 func handleError(dht *DHT, addr *net.UDPAddr,
 	response map[string]interface{}) (success bool) {
 
@@ -796,6 +801,7 @@ var handlers = map[string]func(*DHT, *net.UDPAddr, map[string]interface{}) bool{
 }
 
 // handle handles packets received from udp.
+// 处理接收到的udp包
 func handle(dht *DHT, pkt packet) {
 	if len(dht.workerTokens) == dht.PacketWorkerLimit {
 		return
@@ -807,21 +813,21 @@ func handle(dht *DHT, pkt packet) {
 		defer func() {
 			<-dht.workerTokens
 		}()
-
+		// 黑名单的节点不处理
 		if dht.blackList.in(pkt.raddr.IP.String(), pkt.raddr.Port) {
 			return
 		}
-
+		// 把bencode编码后的数据进行解码
 		data, err := Decode(pkt.data)
 		if err != nil {
 			return
 		}
-
+		// 把解码后的数据进行解析，也就是得到map结构
 		response, err := parseMessage(data)
 		if err != nil {
 			return
 		}
-
+		// 根据map结构分析是哪三种包：请求，响应，错误。并且进行相应处理
 		if f, ok := handlers[response["y"].(string)]; ok {
 			f(dht, pkt.raddr, response)
 		}
