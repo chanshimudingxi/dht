@@ -359,6 +359,7 @@ func (wire *Wire) fetchMetadata(r Request) {
 }
 
 // Run starts the peer wire protocol.
+// 运行基于TCP那部分的协议
 func (wire *Wire) Run() {
 	go wire.blackList.clear()
 
@@ -373,12 +374,12 @@ func (wire *Wire) Run() {
 			key := strings.Join([]string{
 				string(r.InfoHash), genAddress(r.IP, r.Port),
 			}, ":")
-
+			//没有20个字节，在黑名单，队列中有这个key
 			if len(r.InfoHash) != 20 || wire.blackList.in(r.IP, r.Port) ||
 				wire.queue.Has(key) {
 				return
 			}
-
+			//获取infoHash在这个节点的具体快数据
 			wire.fetchMetadata(r)
 		}(r)
 	}

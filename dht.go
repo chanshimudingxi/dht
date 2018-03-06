@@ -226,19 +226,22 @@ func (dht *DHT) id(target string) string {
 }
 
 // GetPeers returns peers who have announced having infoHash.
+// 返回声明自己拥有infoHash信息的节点
 func (dht *DHT) GetPeers(infoHash string) ([]*Peer, error) {
 	if !dht.Ready {
 		return nil, errors.New("dht not ready")
 	}
-
+	//为什么这里infoHash的长度是40？因为此时infoHash是string类型，
+	//但是每个字符只能是一个16进制的数据，也就是0-F。
+	//infoHash在表示的时候都是用16进制的字符串表示。所以总长度为40*4=160个bit
 	if len(infoHash) == 40 {
-		data, err := hex.DecodeString(infoHash)
+		data, err := hex.DecodeString(infoHash)//此时len(data)=20，data类型为[]byte
 		if err != nil {
 			return nil, err
 		}
 		infoHash = string(data)
 	}
-
+	//本地的peers管理器中有该infoHash信息的节点的话，就直接返回
 	peers := dht.peersManager.GetPeers(infoHash, dht.K)
 	if len(peers) != 0 {
 		return peers, nil
@@ -247,13 +250,16 @@ func (dht *DHT) GetPeers(infoHash string) ([]*Peer, error) {
 	ch := make(chan struct{})
 
 	go func() {
+		//获取infoHash的K个邻居节点
+		//说明routingtable能够根据id找出跟其距离最近的K个id
 		neighbors := dht.routingTable.GetNeighbors(
 			newBitmapFromString(infoHash), dht.K)
 
 		for _, no := range neighbors {
+			//去K个infoHash最近的节点查询拥有infoHash信息的其他节点
 			dht.transactionManager.getPeers(no, infoHash)
 		}
-
+		//每隔一秒去查询下本地的peers管理器，看是否有拥有该infoHash信息的节点
 		i := 0
 		for _ = range time.Tick(time.Second * 1) {
 			i++
@@ -266,14 +272,17 @@ func (dht *DHT) GetPeers(infoHash string) ([]*Peer, error) {
 		ch <- struct{}{}
 	}()
 
-	<-ch
+	<-ch//和上一个goroutine中的ch实现阻塞，peers不为空才能返回
 	return peers, nil
 }
 
 // Run starts the dht.
 func (dht *DHT) Run() {
+	//初始化
 	dht.init()
+	//监听
 	dht.listen()
+	//加入DHT网络
 	dht.join()
 
 	dht.Ready = true
@@ -284,11 +293,11 @@ func (dht *DHT) Run() {
 	for {
 		select {
 		case pkt = <-dht.packets:
-			handle(dht, pkt)
-		case <-tick:
-			if dht.routingTable.Len() == 0 {
+			handle(dht, pkt)//处理包
+		case <-tick://定时任务
+			if dht.routingTable.Len() == 0 {//路由表为空时，就要重新加入DHT网络
 				dht.join()
-			} else if dht.transactionManager.len() == 0 {
+			} else if dht.transactionManager.len() == 0 {//交易管理器为空时，要刷新路由表
 				go dht.routingTable.Fresh()
 			}
 		}

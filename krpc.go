@@ -23,18 +23,22 @@ const (
 )
 
 // packet represents the information receive from udp.
+// udp包由数据和地址构成
 type packet struct {
 	data  []byte
 	raddr *net.UDPAddr
 }
 
 // token represents the token when response getPeers request.
+// token数据是由get_peers命令返回的response携带的，主要是用来确认以后的请求。
+// 因为如果你有这个token，表示你曾经和我连接过，进行身份验证的。
 type token struct {
 	data       string
 	createTime time.Time
 }
 
 // tokenManager managers the tokens.
+// 管理 节点--token 的映射
 type tokenManager struct {
 	*syncedMap
 	expiredAfter time.Duration
@@ -97,6 +101,10 @@ func (tm *tokenManager) check(addr *net.UDPAddr, tokenString string) bool {
 }
 
 // makeQuery returns a query-formed data.
+// "t"：交易，也可以叫做回话ID
+// "q": RPC类型。"ping","find_node","get_peers","announce_peer"其中一种
+// "y": 包类型。 "q"表示query，查找信息。"r"表示response，回复。"e"表示error，错误。
+// "a": 请求参数。
 func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"t": t,
@@ -107,6 +115,7 @@ func makeQuery(t, q string, a map[string]interface{}) map[string]interface{} {
 }
 
 // makeResponse returns a response-formed data.
+// "r": 回复参数
 func makeResponse(t string, r map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
 		"t": t,
@@ -116,6 +125,7 @@ func makeResponse(t string, r map[string]interface{}) map[string]interface{} {
 }
 
 // makeError returns a err-formed data.
+// "e": 错误参数
 func makeError(t string, errCode int, errMsg string) map[string]interface{} {
 	return map[string]interface{}{
 		"t": t,
@@ -142,19 +152,21 @@ type query struct {
 }
 
 // transaction implements transaction.
+// 交易，也可以叫做会话
 type transaction struct {
 	*query
-	id       string
+	id       string	//会话id的字符串表示
 	response chan struct{}
 }
 
 // transactionManager represents the manager of transactions.
+// 交易管理器，或者叫回话管理器。
 type transactionManager struct {
 	*sync.RWMutex
 	transactions *syncedMap
 	index        *syncedMap
-	cursor       uint64
-	maxCursor    uint64
+	cursor       uint64//当前会话ID
+	maxCursor    uint64//最大会话ID
 	queryChan    chan *query
 	dht          *DHT
 }
@@ -172,6 +184,7 @@ func newTransactionManager(maxCursor uint64, dht *DHT) *transactionManager {
 }
 
 // genTransID generates a transaction id and returns it.
+// 生成会话ID（也就是由会话管理器中的整形变成字符串型）
 func (tm *transactionManager) genTransID() string {
 	tm.Lock()
 	defer tm.Unlock()
@@ -181,6 +194,7 @@ func (tm *transactionManager) genTransID() string {
 }
 
 // newTransaction creates a new transaction.
+// 新建一个会话
 func (tm *transactionManager) newTransaction(id string, q *query) *transaction {
 	return &transaction{
 		id:       id,
@@ -346,6 +360,22 @@ func (tm *transactionManager) findNode(no *node, target string) {
 }
 
 // getPeers sends get_peers query to the chan.
+/*
+get_peers与torrent文件的infohash有关，找到待查资源是否有peer。
+这时KPRC中的q=get_peers，其中包含节点id和info_hash两个参数，
+如果被请求的节点有对应info_hash的peers，将返回一个关键字values，
+如果无则返回关键字nodes，同时也返回一个token，token在annouce_peer中需要携带。
+
+参数：
+{"id" : "<querying nodes id>", "info_hash" : "<20-byte infohash of target torrent>"}
+
+回复：
+{"id" : "<queried nodes id>", "token" :"<opaque write token>", "values" : ["<peer 1 info string>", "<peer 2 info string>"]}
+
+或者
+{"id" : "<queried nodes id>", "token" :"<opaque write token>", "nodes" : "<compact node info>"}
+这里过来的info_hash不一定是有真实存在的
+*/
 func (tm *transactionManager) getPeers(no *node, infoHash string) {
 	tm.sendQuery(no, getPeersType, map[string]interface{}{
 		"id":        tm.dht.id(infoHash),
@@ -354,6 +384,22 @@ func (tm *transactionManager) getPeers(no *node, infoHash string) {
 }
 
 // announcePeer sends announce_peer query to the chan.
+/*
+announce_peer
+
+这个请求用来表明发出announce_peer请求的节点，正在某个端口下载torrent文件。
+包含四个参数请求节点id、info_hash、整型端口port和tonken，
+收到请求的节点检查这个token，如果相同，则返回节点的IP和port等联系信息。
+爬虫中不能直接用announce_peer，否则很容易从上下文中判断是通报虚假资源而被禁掉。
+
+参数：
+{"id" : "<querying nodes id>", "implied_port": <0 or 1>, "info_hash" : "<20-byte infohash of target torrent>", "port" : <port number>, "token" : "<opaque token>"}
+
+回复：
+{"id" : "<queried nodes id>"}
+这里过来的info_hash表明已经有在下载了，大部分是存在的，这里主要收集这个请求的信息info_hash、ip、port、name（name不一定有）
+ping和find_node和报文案例看一下官方文档或文章后的参考翻译文章，文档已经写得很详细了；了解了这两个请求，基本解决信息收集的问题了。
+*/
 func (tm *transactionManager) announcePeer(
 	no *node, infoHash string, impliedPort, port int, token string) {
 
@@ -701,6 +747,7 @@ func handleResponse(dht *DHT, addr *net.UDPAddr,
 				if err != nil {
 					continue
 				}
+				//插入到peers管理器中
 				dht.peersManager.Insert(infoHash, p)
 			}
 		} else if findOn(
